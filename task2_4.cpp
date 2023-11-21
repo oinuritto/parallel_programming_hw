@@ -7,22 +7,26 @@ int rand(int min, int max) {
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
+    MPI_Status status;
 
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    const int N = 12
-    const int rowsPerProcess = N / size;
-    const int elementsPerProcess = rowsPerProcess * N;
+    const int N = 12;
+    int part_size = N / (size - 1);
+    int lastPart_size = part_size;
 
-    int a[N][N];
-    int b[N][N];
-    int localA[rowsPerProcess][N];
-    int localB[N][N];
-    int localC[rowsPerProcess][N];
+    if (N % (size - 1) > 0) {
+        part_size++;
+        lastPart_size = N % part_size;
+    }
 
     if (rank == 0) {
+        int a[N][N];
+        int b[N][N];
+        int c[N][N];
+
         for (int i = 0; i < N; ++i) {
             for (int j = 0; j < N; ++j) {
                 a[i][j] = rand(0, 10);
@@ -46,59 +50,65 @@ int main(int argc, char** argv) {
             printf("\n");
         }
 
-        for (int i = 1; i < size; ++i) {
-            int startRow = i * rowsPerProcess;
-            MPI_Send(&a[startRow][0], elementsPerProcess, MPI_INT, i, 0, MPI_COMM_WORLD);
+        int startIndex = 0;
+        for (int i = 0; i < size; i++) {
+            if (i == 0)
+                continue;
+            int sizeToTransfer = part_size;
+            if (i == size - 1)
+                sizeToTransfer = lastPart_size;
+
+            MPI_Send(&a[startIndex][0], sizeToTransfer * N, MPI_INT, i, 0, MPI_COMM_WORLD);
             MPI_Send(&b[0][0], N * N, MPI_INT, i, 0, MPI_COMM_WORLD);
+
+            startIndex += part_size;
         }
 
-        for (int i = 0; i < rowsPerProcess; ++i) {
-            for (int j = 0; j < N; ++j) {
-                localA[i][j] = a[i][j];
-            }
-        }
-        for (int i = 0; i < N; ++i) {
-            for (int j = 0; j < N; ++j) {
-                localB[i][j] = b[i][j];
-            }
-        }
-    } else {
-        MPI_Recv(&localA[0][0], elementsPerProcess, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        MPI_Recv(&localB[0][0], N * N, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
+        startIndex = 0;
+        for (int i = 0; i < size; i++) {
+            if (i == 0)
+                continue;
 
-    for (int i = 0; i < rowsPerProcess; ++i) {
-        for (int j = 0; j < N; ++j) {
-            localC[i][j] = 0;
-            for (int k = 0; k < N; ++k) {
-                localC[i][j] += localA[i][k] * localB[k][j];
-            }
-        }
-    }
+            int sizeToTransfer = part_size;
+            if (i == size - 1)
+                sizeToTransfer = lastPart_size;
 
-    if (rank == 0) {
-        int resultMatrix[N][N];
+            MPI_Recv(&c[startIndex][0], sizeToTransfer * N, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        for (int i = 1; i < size; ++i) {
-            int startRow = i * rowsPerProcess;
-            MPI_Recv(&resultMatrix[startRow][0], elementsPerProcess, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            startIndex += part_size;
         }
 
-        for (int i = 0; i < rowsPerProcess; ++i) {
-            for (int j = 0; j < N; ++j) {
-                resultMatrix[i][j] = localC[i][j];
-            }
-        }
-
-        printf("Result:\n");
-        for (auto & i : resultMatrix) {
+        printf("Matrix C:\n");
+        for (auto & i : c) {
             for (int j : i) {
                 printf("%d ", j);
             }
             printf("\n");
         }
+
     } else {
-        MPI_Send(&localC[0][0], elementsPerProcess, MPI_INT, 0, 0, MPI_COMM_WORLD);
+        int localA[N][N];
+        int localB[N][N];
+        int localC[N][N];
+
+        int count;
+
+        MPI_Probe(0, 0, MPI_COMM_WORLD, &status);
+        MPI_Get_count(&status, MPI_INT, &count);
+
+        MPI_Recv(&localA[0][0], count, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+        MPI_Recv(&localB[0][0], N * N, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+
+        for (int i = 0; i < part_size; ++i) {
+            for (int j = 0; j < N; ++j) {
+                localC[i][j] = 0;
+                for (int k = 0; k < N; ++k) {
+                    localC[i][j] += localA[i][k] * localB[k][j];
+                }
+            }
+        }
+
+        MPI_Send(&localC[0][0], count, MPI_INT, 0, 0, MPI_COMM_WORLD);
     }
 
     MPI_Finalize();
